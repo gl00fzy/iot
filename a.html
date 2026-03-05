@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vehicle Tracking - Snap to Road with Info</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 20px; font-family: 'Kanit', sans-serif; background-color: #f0f2f5; }
+        #map { height: 700px; width: 100%; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+        .header { margin-bottom: 20px; text-align: center; }
+        h2 { color: #1a73e8; margin-bottom: 5px; }
+        .status-tag { font-size: 13px; color: #5f6368; }
+        /* ปรับแต่งสไตล์ Popup */
+        .leaflet-popup-content-wrapper { border-radius: 8px; padding: 5px; }
+        .popup-info b { color: #1a73e8; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>ระบบติดตามรถขนส่งอัจฉริยะ</h2>
+        <div class="status-tag">คลิกที่รถเพื่อดูพิกัด | อัปเดตทุก 10 วินาที</div>
+    </div>
+    
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // 1. ตั้งค่าแผนที่และ Layer
+        const map = L.map('map').setView([16.24836, 103.24779], 14);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        const vehicles = {};
+
+        // 2. ฟังก์ชันแปลง Unix Timestamp เป็นเวลาไทย
+        function formatTime(unixTimestamp) {
+            const date = new Date(unixTimestamp * 1000);
+            return date.toLocaleString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        // 3. ฟังก์ชันสุ่มสีเส้น
+        function getBrightColor() {
+            return `hsl(${Math.random() * 360}, 80%, 45%)`;
+        }
+
+        // 4. ฟังก์ชันขอเส้นทางที่ล้อตามถนนจาก OSRM
+        async function getRoadPath(coords) {
+            if (coords.length < 2) return coords;
+            const query = coords.map(c => `${c[1]},${c[0]}`).join(';');
+            const url = `https://router.project-osrm.org/match/v1/driving/${query}?geometries=geojson&overview=full`;
+
+            try {
+                const res = await fetch(url);
+                const result = await res.json();
+                if (result.code === 'Ok' && result.matchings[0]) {
+                    return result.matchings[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                }
+            } catch (e) { console.warn("OSRM error:", e); }
+            return coords;
+        }
+
+        // 5. ฟังก์ชันดึงข้อมูลและอัปเดตหน้าจอ
+        async function updateTracking() {
+            try {
+                const response = await fetch('http://10.119.120.84:1880/get-tracks/');
+                const data = await response.json();
+
+                for (const carId in data) {
+                    const rawPoints = data[carId].sort((a, b) => a.tst - b.tst).slice(-20);
+                    if (rawPoints.length === 0) continue;
+
+                    const latLngs = rawPoints.map(p => [p.lat, p.lon]);
+                    const lastData = rawPoints[rawPoints.length - 1]; // ข้อมูลจุดล่าสุด
+                    const currentPos = [lastData.lat, lastData.lon];
+                    
+                    const roadPath = await getRoadPath(latLngs);
+
+                    // สร้างเนื้อหาใน Popup
+                    const popupContent = `
+                        <div class="popup-info">
+                            <b>รหัสรถ:</b> ${carId}<br>
+                            <b>พิกัด:</b> ${lastData.lat.toFixed(6)}, ${lastData.lon.toFixed(6)}<br>
+                            <b>เวลาล่าสุด:</b> ${formatTime(lastData.tst)} น.<br>
+                            <b>ความแม่นยำ:</b> ${lastData.acc || '-'} m.
+                        </div>
+                    `;
+
+                    if (!vehicles[carId]) {
+                        // สร้างรถคันใหม่
+                        const carColor = getBrightColor();
+                        const carIcon = L.icon({
+                            iconUrl: `${carId}.png`,
+                            iconSize: [38, 38],
+                            iconAnchor: [19, 19],
+                            popupAnchor: [0, -15]
+                        });
+
+                        const marker = L.marker(currentPos, { icon: carIcon }).addTo(map)
+                            .bindPopup(popupContent);
+
+                        const polyline = L.polyline(roadPath, {
+                            color: carColor,
+                            weight: 6,
+                            opacity: 0.6,
+                            lineJoin: 'round'
+                        }).addTo(map);
+
+                        vehicles[carId] = { marker, polyline };
+                    } else {
+                        // อัปเดตรถที่มีอยู่แล้ว
+                        vehicles[carId].marker.setLatLng(currentPos).setPopupContent(popupContent);
+                        vehicles[carId].polyline.setLatLngs(roadPath);
+                    }
+                }
+            } catch (err) {
+                console.error("Data fetch error:", err);
+            }
+        }
+
+        // เริ่มทำงาน
+        updateTracking();
+        setInterval(updateTracking, 10000); // อัปเดตทุก 10 วินาที
+
+    </script>
+</body>
+</html>
