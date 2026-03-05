@@ -68,7 +68,7 @@
         // 5. ฟังก์ชันดึงข้อมูลและอัปเดตหน้าจอ
         async function updateTracking() {
             try {
-                const response = await fetch('http://10.119.120.84:1880/get-tracks/');
+                const response = await fetch('http://45.136.255.138:1880/get-tracks/');
                 const data = await response.json();
 
                 for (const carId in data) {
